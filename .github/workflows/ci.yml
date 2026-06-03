@@ -20,6 +20,9 @@ jobs:
           pip install pre-commit pytest==8.2.2 pytest-asyncio==0.23.8 black==26.5.1 ruff==0.15.15 mypy==1.20.2
           pip install torch==2.3.1 --index-url https://download.pytorch.org/whl/cpu
           pip install -r training/requirements.txt
+          pip install -r services/eval_consumer/requirements.txt
+          pip install -r services/rag_app/requirements.txt
+          pip install -r services/drift_detector/requirements.txt
 
       - name: pre-commit
         run: pre-commit run --all-files
