@@ -7,12 +7,13 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from functools import wraps
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import chromadb
 import httpx
 import yaml
 from chromadb.api import ClientAPI
+from chromadb.api.types import EmbeddingFunction
 from chromadb.utils.embedding_functions.sentence_transformer_embedding_function import (
     SentenceTransformerEmbeddingFunction,
 )
@@ -93,8 +94,14 @@ def _build_chroma_client() -> ClientAPI:
 
 
 def _build_collection(client: ClientAPI, runtime: RagRuntimeConfig) -> Any:
-    embedder = SentenceTransformerEmbeddingFunction(model_name=runtime.embedding_model)
-    return client.get_or_create_collection(name=runtime.collection_name, embedding_function=embedder)
+    embedder = cast(
+        EmbeddingFunction[Any],
+        SentenceTransformerEmbeddingFunction(model_name=runtime.embedding_model),
+    )
+    return client.get_or_create_collection(
+        name=runtime.collection_name,
+        embedding_function=embedder,
+    )
 
 
 def _build_prompt(question: str, contexts: list[str]) -> str:
