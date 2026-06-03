@@ -23,6 +23,7 @@ jobs:
           pip install -r services/eval_consumer/requirements.txt
           pip install -r services/rag_app/requirements.txt
           pip install -r services/drift_detector/requirements.txt
+          pip install protobuf==3.20.3
 
       - name: pre-commit
         run: pre-commit run --all-files
