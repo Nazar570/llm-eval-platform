@@ -13,7 +13,9 @@ import chromadb
 import httpx
 import yaml
 from chromadb.api import ClientAPI
-from chromadb.utils import embedding_functions
+from chromadb.utils.embedding_functions.sentence_transformer_embedding_function import (
+    SentenceTransformerEmbeddingFunction,
+)
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
@@ -91,7 +93,7 @@ def _build_chroma_client() -> ClientAPI:
 
 
 def _build_collection(client: ClientAPI, runtime: RagRuntimeConfig) -> Any:
-    embedder = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=runtime.embedding_model)
+    embedder = SentenceTransformerEmbeddingFunction(model_name=runtime.embedding_model)
     return client.get_or_create_collection(name=runtime.collection_name, embedding_function=embedder)
 
 
