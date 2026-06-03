@@ -91,9 +91,7 @@ def _build_chroma_client() -> ClientAPI:
 
 
 def _build_collection(client: ClientAPI, runtime: RagRuntimeConfig) -> Any:
-    embedder = embedding_functions.SentenceTransformerEmbeddingFunction(  # type: ignore[attr-defined]
-        model_name=runtime.embedding_model
-    )
+    embedder = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=runtime.embedding_model)
     return client.get_or_create_collection(name=runtime.collection_name, embedding_function=embedder)
 
 
