@@ -1,0 +1,125 @@
+platform:
+  name: llm-eval-platform
+  environment: local
+
+kafka:
+  trace_topic: llm-traces
+  consumer_group: eval-consumer-group
+  partitions: 3
+  replication_factor: 1
+  auto_offset_reset: earliest
+  max_poll_records: 16
+
+ollama:
+  model: llama3.2:3b
+  request_timeout_seconds: 120
+  temperature: 0.0
+  num_ctx: 4096
+  keep_alive: 5m
+
+rag:
+  collection_name: rag_documents
+  chunk_size: 512
+  chunk_overlap: 64
+  retrieval_top_k: 4
+  embedding_model: sentence-transformers/all-MiniLM-L6-v2
+
+scorers:
+  ragas:
+    metrics:
+      - faithfulness
+      - answer_relevancy
+      - context_recall
+  bert_score:
+    model_type: microsoft/deberta-base-mnli
+    lang: en
+    rescale_with_baseline: true
+  llm_judge:
+    scale_min: 1
+    scale_max: 5
+    prompt_version: v1
+
+thresholds:
+  faithfulness: 0.70
+  answer_relevancy: 0.70
+  context_recall: 0.65
+  bert_score: 0.60
+  llm_judge: 0.60
+
+drift:
+  reference_window_size: 200
+  current_window_size: 100
+  check_interval_seconds: 300
+  stattest: ks
+  stattest_threshold: 0.05
+  drifted_metric_share: 0.5
+
+training:
+  base_model: distilbert-base-uncased
+  max_length: 256
+  batch_size: 8
+  gradient_accumulation_steps: 2
+  learning_rate: 0.00002
+  num_epochs: 3
+  fp16: true
+  dataset_output_path: data/eval_dataset.jsonl
+  model_output_dir: data/distilbert_eval_model
+  eval_database_host: localhost
+  eval_database_port: 5433
+  eval_database_user: eval
+  eval_database_password: eval
+  eval_database_name: evaldb
+  eval_split: 0.2
+  seed: 42
+  positive_label_threshold: 0.7
+  positive_choice_labels:
+    - good
+    - correct
+    - pass
+  fallback_metric: answer_relevancy
+  fallback_row_limit: 5000
+  weak_labeling:
+    enabled: true
+    min_votes: 2
+    positive:
+      answer_relevancy: 0.85
+      bert_score: 0.88
+      llm_judge: 0.80
+      faithfulness: 0.85
+    negative:
+      answer_relevancy: 0.35
+      bert_score: 0.55
+      llm_judge: 0.35
+      faithfulness: 0.40
+  active_learning:
+    enabled: true
+    uncertainty_low: 0.45
+    uncertainty_high: 0.55
+    export_limit: 200
+  lora:
+    r: 8
+    alpha: 16
+    dropout: 0.1
+    target_modules:
+      - q_lin
+      - v_lin
+
+mlflow:
+  experiment_name: distilbert-evaluator
+  registered_model_name: distilbert-eval-judge
+  tracking_uri: http://localhost:5000
+
+label_studio:
+  project_title: llm-eval-annotation
+  export_format: JSON
+  url: http://localhost:8080
+  token: label-studio-local-token
+
+batch_eval:
+  schedule_interval_hours: 6
+  batch_size: 64
+
+metrics:
+  rag_app_port: 8001
+  eval_consumer_port: 8002
+  drift_detector_port: 8003

@@ -1,0 +1,443 @@
+name: llm-eval-platform
+
+x-airflow-common: &airflow-common
+  build:
+    context: ..
+    dockerfile: airflow/Dockerfile
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__FERNET_KEY: "z3xY7Qd1nQp9mWv2tRk8sLh4jFb6cNa0eUgD5oZpXc="
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://eval:eval@postgres:5432/airflow
+    AIRFLOW__WEBSERVER__SECRET_KEY: "airflow-local-secret-key"
+    AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth"
+    EVAL_DATABASE_HOST: postgres
+    EVAL_DATABASE_PORT: "5432"
+    EVAL_DATABASE_USER: eval
+    EVAL_DATABASE_PASSWORD: eval
+    EVAL_DATABASE_NAME: evaldb
+    MLFLOW_TRACKING_URI: http://mlflow:5000
+    LABEL_STUDIO_URL: http://label-studio:8080
+    OLLAMA_BASE_URL: http://ollama:11434
+    EVAL_CONFIG_PATH: /opt/airflow/config/settings.yaml
+    PROMETHEUS_PUSHGATEWAY_URL: http://pushgateway:9091
+
+  volumes:
+    - ../airflow/dags:/opt/airflow/dags
+    - ../training:/opt/airflow/training
+    - airflow-logs:/opt/airflow/logs
+  networks:
+    - eval-platform-net
+  depends_on:
+    postgres-init:
+      condition: service_completed_successfully
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: "2181"
+      ZOOKEEPER_TICK_TIME: "2000"
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-log:/var/lib/zookeeper/log
+    networks:
+      - eval-platform-net
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 2181 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: "1"
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - eval-platform-net
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:29092 --list || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists \
+          --topic llm-traces --partitions 3 --replication-factor 1
+        kafka-topics --bootstrap-server kafka:29092 --describe --topic llm-traces
+        echo "topic llm-traces ready"
+    networks:
+      - eval-platform-net
+
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    environment:
+      POSTGRES_USER: eval
+      POSTGRES_PASSWORD: eval
+      POSTGRES_DB: evaldb
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - eval-platform-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eval -d evaldb"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  postgres-init:
+    image: postgres:16
+    container_name: postgres-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: eval
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        for db in airflow labelstudio mlflow; do
+          exists=$$(psql -h postgres -U eval -d evaldb -tAc "SELECT 1 FROM pg_database WHERE datname='$$db'")
+          if [ "$$exists" != "1" ]; then
+            psql -h postgres -U eval -d evaldb -c "CREATE DATABASE $$db OWNER eval"
+            echo "created database $$db"
+          else
+            echo "database $$db already exists"
+          fi
+        done
+    networks:
+      - eval-platform-net
+
+  redis:
+    image: redis:7.2
+    container_name: redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - eval-platform-net
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        ollama serve &
+        server_pid=$$!
+        until ollama list >/dev/null 2>&1; do
+          sleep 2
+        done
+        ollama pull llama3.2:3b
+        wait $$server_pid
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - eval-platform-net
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
+  chromadb:
+    image: chromadb/chroma:0.5.5
+    container_name: chromadb
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    ports:
+      - "8000:8000"
+    volumes:
+      - chromadb-data:/chroma/chroma
+    networks:
+      - eval-platform-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v1/heartbeat || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  label-studio:
+    image: heartexlabs/label-studio:1.12.1
+    container_name: label-studio
+    environment:
+      LABEL_STUDIO_USERNAME: admin@eval.local
+      LABEL_STUDIO_PASSWORD: labelstudio
+      LABEL_STUDIO_USER_TOKEN: label-studio-local-token
+      DJANGO_DB: default
+      POSTGRE_NAME: labelstudio
+      POSTGRE_USER: eval
+      POSTGRE_PASSWORD: eval
+      POSTGRE_PORT: "5432"
+      POSTGRE_HOST: postgres
+    ports:
+      - "8080:8080"
+    volumes:
+      - label-studio-data:/label-studio/data
+    networks:
+      - eval-platform-net
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.14.1
+    container_name: mlflow
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        pip install --no-cache-dir psycopg2-binary >/dev/null 2>&1
+        mlflow server \
+          --host 0.0.0.0 \
+          --port 5000 \
+          --backend-store-uri postgresql+psycopg2://eval:eval@postgres:5432/mlflow \
+          --artifacts-destination /mlflow/artifacts \
+          --serve-artifacts
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow-data:/mlflow
+    networks:
+      - eval-platform-net
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/health')\" || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname admin \
+          --lastname admin \
+          --role Admin \
+          --email admin@eval.local || true
+    restart: on-failure
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: webserver
+    ports:
+      - "8081:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    restart: always
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: always
+
+  pushgateway:
+    image: prom/pushgateway:v1.9.0
+    container_name: pushgateway
+    ports:
+      - "9091:9091"
+    networks:
+      - eval-platform-net
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q -O- http://localhost:9091/-/healthy || exit 1" ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - eval-platform-net
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - eval-platform-net
+    depends_on:
+      - prometheus
+
+  rag-app:
+    build:
+      context: ..
+      dockerfile: services/rag_app/Dockerfile
+    container_name: rag-app
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TRACE_TOPIC: llm-traces
+      CHROMADB_HOST: chromadb
+      CHROMADB_PORT: "8000"
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: llama3.2:3b
+    ports:
+      - "8001:8001"
+    volumes:
+      - ../services/rag_app:/app/services/rag_app
+    networks:
+      - eval-platform-net
+    depends_on:
+      kafka:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+  eval-consumer:
+    build:
+      context: ..
+      dockerfile: services/eval_consumer/Dockerfile
+    container_name: eval-consumer
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TRACE_TOPIC: llm-traces
+      KAFKA_CONSUMER_GROUP: eval-consumer-group
+      EVAL_DATABASE_HOST: postgres
+      EVAL_DATABASE_PORT: "5432"
+      EVAL_DATABASE_USER: eval
+      EVAL_DATABASE_PASSWORD: eval
+      EVAL_DATABASE_NAME: evaldb
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: llama3.2:3b
+      METRICS_PORT: "8002"
+    ports:
+      - "8002:8002"
+    volumes:
+      - ../services/eval_consumer:/app/services/eval_consumer
+    networks:
+      - eval-platform-net
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+  drift-detector:
+    build:
+      context: ..
+      dockerfile: services/drift_detector/Dockerfile
+    container_name: drift-detector
+    environment:
+      EVAL_DATABASE_HOST: postgres
+      EVAL_DATABASE_PORT: "5432"
+      EVAL_DATABASE_USER: eval
+      EVAL_DATABASE_PASSWORD: eval
+      EVAL_DATABASE_NAME: evaldb
+      AIRFLOW_WEBHOOK_URL: http://airflow-webserver:8080/api/v1/dags/retrain_trigger/dagRuns
+      AIRFLOW_USERNAME: admin
+      AIRFLOW_PASSWORD: admin
+      DRIFT_CHECK_INTERVAL_SECONDS: "300"
+      METRICS_PORT: "8003"
+    ports:
+      - "8003:8003"
+    volumes:
+      - ../services/drift_detector:/app/services/drift_detector
+    networks:
+      - eval-platform-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  eval-platform-net:
+    name: eval-platform-net
+    driver: bridge
+
+volumes:
+  zookeeper-data:
+  zookeeper-log:
+  kafka-data:
+  postgres-data:
+  redis-data:
+  ollama-data:
+  chromadb-data:
+  label-studio-data:
+  mlflow-data:
+  airflow-logs:
+  prometheus-data:
+  grafana-data:

@@ -1,0 +1,61 @@
+name: eval-report
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: eval
+          POSTGRES_PASSWORD: eval
+          POSTGRES_DB: evaldb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U eval -d evaldb"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      EVAL_DATABASE_HOST: localhost
+      EVAL_DATABASE_PORT: "5432"
+      EVAL_DATABASE_USER: eval
+      EVAL_DATABASE_PASSWORD: eval
+      EVAL_DATABASE_NAME: evaldb
+      EVAL_REPORT_OUTPUT: ${{ github.workspace }}/eval_report.md
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install alembic==1.13.2 psycopg2-binary==2.9.9 "sqlalchemy[asyncio]==2.0.31" asyncpg==0.29.0 pydantic==2.7.4 pydantic-settings==2.3.4 pyyaml==6.0.1
+
+      - name: Initialize schema
+        run: alembic -c db/alembic.ini upgrade head
+
+      - name: Generate report
+        run: python -m training.eval_report
+
+      - name: Append report to job summary
+        run: cat "${EVAL_REPORT_OUTPUT}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: ${{ github.workspace }}/eval_report.md

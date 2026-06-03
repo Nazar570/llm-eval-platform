@@ -1,0 +1,62 @@
+[
+  {
+    "question": "What is Python?",
+    "answer": "Python is a programming language."
+  },
+  {
+    "question": "What is PostgreSQL?",
+    "answer": "PostgreSQL is an open-source relational database."
+  },
+  {
+    "question": "What is Docker?",
+    "answer": "Docker is a container platform."
+  },
+  {
+    "question": "What is the capital of France?",
+    "answer": "Paris is the capital of France."
+  },
+  {
+    "question": "What is the capital of France?",
+    "answer": "Lyon is the capital of France."
+  },
+  {
+    "question": "What is the capital of Germany?",
+    "answer": "Berlin is the capital of Germany."
+  },
+  {
+    "question": "What is the capital of Germany?",
+    "answer": "Munich is the capital of Germany."
+  },
+  {
+    "question": "What is the capital of Italy?",
+    "answer": "Rome is the capital of Italy."
+  },
+  {
+    "question": "What is the capital of Italy?",
+    "answer": "Milan is the capital of Italy."
+  },
+  {
+    "question": "What is 2 + 2?",
+    "answer": "2 + 2 equals 4."
+  },
+  {
+    "question": "What is 2 + 2?",
+    "answer": "2 + 2 equals 5."
+  },
+  {
+    "question": "What is 5 + 7?",
+    "answer": "5 + 7 equals 12."
+  },
+  {
+    "question": "What is 5 + 7?",
+    "answer": "5 + 7 equals 13."
+  },
+  {
+    "question": "Who wrote Hamlet?",
+    "answer": "William Shakespeare wrote Hamlet."
+  },
+  {
+    "question": "Who wrote Hamlet?",
+    "answer": "Charles Dickens wrote Hamlet."
+  }
+]

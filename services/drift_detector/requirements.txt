@@ -1,0 +1,10 @@
+sqlalchemy[asyncio]==2.0.31
+asyncpg==0.29.0
+pydantic==2.7.4
+pydantic-settings==2.3.4
+httpx==0.27.0
+prometheus-client==0.20.0
+PyYAML==6.0.1
+evidently==0.4.30
+pandas==2.2.2
+numpy==1.26.4
